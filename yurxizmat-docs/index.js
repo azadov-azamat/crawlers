@@ -1,139 +1,205 @@
 const puppeteer = require('puppeteer');
+const fs = require('fs'); // Fayl tizimini import qilish
+const path = require('path'); // Yo'lni boshqarish uchun
 
-// Asinxron funktsiya, Puppeteer brauzerini ishga tushirish va sahifalarni boshqarish uchun
 (async () => {
-    // Brauzerni ishga tushirish uchun kerakli sozlamalar
+    const startIndex = 5; // Bu yerda boshlash indeksini o'zgartiring
     const browser = await puppeteer.launch({
-        headless: 'new', // Yangi headless rejimini yoqish
+        headless: 'new',
         args: [
-          "--disable-setuid-sandbox", // Xavfsizlik sozlamalarini o'chirish
-          "--no-sandbox", // Sandbox rejimini o'chirish
-          "--single-process", // Yagona jarayon rejimi
-          "--no-zygote", // Zygote jarayonini o'chirish
+            '--disable-setuid-sandbox',
+           '--no-sandbox',
+           '--disable-web-security',
+           '--disable-dev-shm-usage',
+           '--disable-gpu',
+           '--window-size=1920,1080',
+           '--no-zygote',
+           '--single-process',
         ],
         executablePath:
-          process.env.NODE_ENV === "production"
-            ? process.env.PUPPETEER_EXECUTABLE_PATH // Production muhitida maxsus yo'l
-            : puppeteer.executablePath(), // Aks holda puppeteer standart yo'lidan foydalanish
+            process.env.NODE_ENV === "production"
+                ? process.env.PUPPETEER_EXECUTABLE_PATH
+                : puppeteer.executablePath(),
     });
-    
-    // Yangi sahifa ochish
     const page = await browser.newPage();
-
-    // Sahifaning o'lchamini belgilash
     await page.setViewport({ width: 1280, height: 800 });
-
-    // Navigatsiya uchun yuqori vaqtni belgilash
-    page.setDefaultNavigationTimeout(60000); // 60 soniya
-
-    // Asosiy sahifaga o'tish
-    console.log('Asosiy sahifaga o\'tish...');
     await page.goto('https://yurxizmat.uz/oz/categories', { waitUntil: 'networkidle2' });
-    await page.waitForSelector('.documents-list'); // Hujjatlar ro'yxati paydo bo'lishini kutish
 
-    // Ma'lum bir sahifadan hujjatlarni yuklab olish funktsiyasi
-    const downloadDocumentsFromPage = async (pageNumber) => {
-        try {
-            // Berilgan sahifaga o'tish
-            await page.goto(`https://yurxizmat.uz/oz/categories?page=${pageNumber}`, { waitUntil: 'networkidle2' });
-            await page.waitForSelector('.documents-list'); // Hujjatlar ro'yxati paydo bo'lishini kutish
+    // Kategoriyalarni olish
+    await page.waitForSelector('.metismenu'); // Kategoriyalar ro'yxati yuklanguncha kuting
+    const categories = await page.$$eval('.metismenu > li > a', links => {
+        return links.map(link => ({
+            name: link.innerText.trim(), // Kategoriya nomini olish
+            url: link.href,
+            hasArrow: link.classList.contains('has-arrow') // has-arrow klassini tekshirish
+        }));
+    });
 
-            // Hujjatlar ro'yxatidan barcha hujjat havolalarini olish
-            const docLinks = await page.$$eval('.documents-list .document-item', items => items.map(item => item.getAttribute('data-key')));
+    // console.log('categories', categories);
 
-            // Har bir hujjat uchun yuklab olish jarayonini bajarish
-            for (const [docIndex, docKey] of docLinks.entries()) {
-                const docLink = `https://yurxizmat.uz/oz/document/${docKey}`;
-                console.log(`Hujjatga o'tish ${docIndex + 1}/${docLinks.length} sahifada ${pageNumber}: ${docLink}`);
-                await page.goto(docLink, { waitUntil: 'networkidle2', timeout: 60000 }); // 120 soniya vaqt
+    const processSubCategories = async (page, subCategories, categoryFolder) => {
+        console.log('subCategories', subCategories);
+        for (const subCategory of subCategories) {
+            console.log(`O'tish: Sub-kategoriya - ${subCategory.name}`); // Sub-kategoriya haqida log
+            await page.goto(subCategory.url, { waitUntil: 'networkidle2' }); // Sub-kategoriya sahifasiga o'tish
+            await page.waitForSelector('.documents-list'); // Fayllar ro'yxati yuklanguncha kuting
 
-                // Sahifa to'liq yuklanguncha kutish
-                await page.waitForFunction(() => {
-                    return document.readyState === 'complete' && 
-                           document.querySelectorAll('.document-view-wrapper').length > 0;
-                }, { timeout: 30000 }); // Vaqtni oshirish
-
-                // Sahifa yuklangandan keyin 3 soniya kutish
-                await new Promise(resolve => setTimeout(resolve, 1000)); // 1 soniya kutish
-
-                // Kirish maydonlari va tanlovlar bilan ishlash
-                const inputs = await page.$$('input, select'); // Kirish va tanlov elementlarini tanlash
-
-                for (const input of inputs) {
-                    const tagName = await input.evaluate(el => el.tagName.toLowerCase());
-                    const inputId = await input.evaluate(el => el.id);
-                    const label = await page.$(`label[for="${inputId}"]`);
-                    
-                    if (label) {
-                        const labelText = await label.evaluate(el => el.innerText);
-                        if (tagName === 'input') {
-                            await input.type(labelText); // Kirish maydoniga label matnini yozish
-                        } else if (tagName === 'select') {
-                            const options = await input.evaluate(el => Array.from(el.options).map(option => option.value));
-                            if (options.length > 0) {
-                                await input.select(options[0]); // Agar mavjud bo'lsa, birinchi variantni tanlash
-                                console.log(`Tanlangan variant: ${labelText}`);
-                            } else {
-                                console.log(`Tanlov uchun variantlar mavjud emas: ${labelText}`);
-                            }
-                        }
-                    }
-
-                    // Yozish yoki tanlashdan keyin qisqa vaqt kutish
-                    await new Promise(resolve => setTimeout(resolve, 500)); // 1 soniya kutish
-                }
-
-                // Yuklab olish havolasining paydo bo'lishini kutish
-                await page.waitForSelector('a.document-download', { timeout: 20000 }); // Yuklab olish havolasini kutish
-
-                // Faqat hujjat fayli bo'lsa, yuklab olish havolasini bosish
-                const downloadLink = await page.$('a.document-download');
-                if (downloadLink) {
-                    const fileFormat = await downloadLink.evaluate(el => el.getAttribute('data-format'));
-                    if (fileFormat === 'docx') { // Fayl formatini tekshirish
-                        const dataId = await downloadLink.evaluate(el => el.getAttribute('data-id'));
-                        console.log(`ID bilan faylni yuklab olish: ${dataId}`);
-                        await downloadLink.click();
-
-                        // Yuklash boshlanishini ta'minlash uchun qisqa vaqt kutish
-                        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 soniya kutish
-                    } else {
-                        console.log('Hujjat fayli emas, yuklab olishni o\'tkazib yuborish.');
-                    }
-                } else {
-                    console.log('Yuklab olish havolasi topilmadi.');
-                }
-
-                // Hujjatlar ro'yxati sahifasiga qaytish
-                await page.goBack();
+            // Sub-kategoriya uchun papka yaratish
+            const subCategoryFolder = path.join(categoryFolder, subCategory.name);
+            if (!fs.existsSync(subCategoryFolder)) {
+                fs.mkdirSync(subCategoryFolder, { recursive: true });
             }
 
-            // Keyingi sahifa mavjudligini tekshirish va unga o'tish
-            const nextPageButton = await page.$('nav.custom-pagination .pagination .next'); // Tanlovni moslashtirish
-            if (nextPageButton) {
-                console.log('Keyingi sahifaga o\'tish...');
-                await page.goto(`https://yurxizmat.uz/oz/categories?page=${pageNumber}`, { waitUntil: 'networkidle2' });
-                await page.waitForSelector('.documents-list'); // Hujjatlar ro'yxati paydo bo'lishini kutish
-                return true; // Keyingi sahifa mavjudligini ko'rsatish
+            // Har bir sub-kategoriyaning fayllarini yuklab olish
+            let hasNextPage = true;
+            let currentPage = 1;
+
+            while (hasNextPage) {
+                console.log(`Yuklab olish: Sahifa - ${currentPage}, Sub-kategoriya - ${subCategory.name}`); // Yuklab olish jarayoni haqida log
+                hasNextPage = await downloadDocumentsFromPage(browser, page, currentPage, subCategory.url, subCategoryFolder); // subCategoryFolder ni uzatish
+                currentPage++;
             }
-            return false; // Sahifalar tugadi
-        } catch (error) {
-            console.error(`Sahifada xato ${pageNumber}:`, error);
-            return false; // Xato yuz berganda jarayonni to'xtatish
+
+            // Sub-sub-kategoriyalarni olish faqat hasArrow bo'lganlar uchun
+            if (subCategory.hasArrow) {
+                console.log('subCategory', subCategory);
+                // const subSubCategories = await page.$$eval('.collapse.in li a.has-arrow', links => {
+                //     return links.map(link => ({
+                //         name: link.innerText.trim(), // Sub-sub-kategoriya nomini olish
+                //         url: link.href
+                //     }));
+                // });
+
+                // // Agar sub-sub-kategoriyalar mavjud bo'lsa, ularni qayta ishlang
+                // if (subSubCategories.length > 0) {
+                //     console.log(`Sub-kategoriya - ${subCategory.name} ichida sub-sub-kategoriyalar mavjud:`, subSubCategories.map(sc => sc.name).join(', '));
+                //     await processSubCategories(page, subSubCategories, subCategoryFolder);
+                // }
+            } else {
+                // Agar hasArrow false bo'lsa, fayllarni yuklab olish
+                console.log(`Fayllarni yuklab olish: Sub-kategoriya - ${subCategory.name}`); // Yuklab olish jarayoni haqida log
+                let hasNextPage = true;
+                let currentPage = 1;
+
+                while (hasNextPage) {
+                    hasNextPage = await downloadDocumentsFromPage(browser, page, currentPage, subCategory.url, subCategoryFolder); // noArrowSubCategoryFolder ni uzatish
+                    currentPage++;
+                }
+            }
         }
     };
 
-    // Berilgan sahifadan yuklab olishni boshlash
-    const startPage = 10; // Boshlanish sahifasini o'zgartiring
-    let hasNextPage = true;
-    let currentPage = startPage;
+    // Kategoriyalardan boshlash
+    for (let i = startIndex; i < categories.length; i++) {
+        const category = categories[i];
+        console.log(`O'tish: Kategoriya - ${category.name}`); // Kategoriya haqida log
+        await page.goto(category.url, { waitUntil: 'networkidle2' }); // Kategoriya sahifasiga o'tish
+        await page.waitForSelector('.collapse.in'); // Sub-kategoriyalar yuklanguncha kuting
 
-    // Keyingi sahifalar mavjud bo'lsa, yuklab olishni davom ettirish
-    while (hasNextPage) {
-        hasNextPage = await downloadDocumentsFromPage(currentPage);
-        currentPage++;
+        // Kategoriyalarni olish
+        const subCategories = await page.$$eval('.collapse.in > li > a', links => {
+            return links.map(link => ({
+                name: link.innerText.trim(), // Kategoriya nomini olish
+                url: link.href,
+                hasArrow: link.classList.contains('has-arrow') // has-arrow klassini tekshirish
+            }));
+        });
+
+        // Kategoriya uchun papka yaratish
+        const categoryFolder = path.join(__dirname, category.name);
+        if (!fs.existsSync(categoryFolder)) {
+            fs.mkdirSync(categoryFolder, { recursive: true });
+        }
+
+        // Faqat has-arrow bo'lgan sub-kategoriyalarni qayta ishlash
+        // await processSubCategories(page, subCategories.filter(sc => sc.hasArrow), categoryFolder);
+
+        // Has-arrow bo'lmagan sub-kategoriyalarni yuklab olish
+        const noArrowSubCategories = subCategories.filter(sc => !sc.hasArrow);
+        for (const noArrowSubCategory of noArrowSubCategories) {
+            const noArrowSubCategoryFolder = path.join(categoryFolder, noArrowSubCategory.name);
+            if (!fs.existsSync(noArrowSubCategoryFolder)) {
+                fs.mkdirSync(noArrowSubCategoryFolder, { recursive: true });
+            }
+
+            // O'ziga fayllarni yuklab olish
+            console.log(`Yuklab olish: Sub-kategoriya - ${noArrowSubCategory.name}`); // Yuklab olish jarayoni haqida log
+            let hasNextPage = true;
+            let currentPage = 1;
+
+            while (hasNextPage) {
+                hasNextPage = await downloadDocumentsFromPage(browser, page, currentPage, noArrowSubCategory.url, noArrowSubCategoryFolder); // noArrowSubCategoryFolder ni uzatish
+                if (hasNextPage) {
+                    currentPage++;
+                }
+            }
+        }
     }
 
-    console.log('Barcha yuklashlar tugadi. sahifa=', currentPage);
-    await browser.close(); // Brauzerni yopish
+    await browser.close();
 })();
+
+const downloadDocumentsFromPage = async (browser, page, pageNumber, subCategoryUrl, subCategoryFolder) => {
+    try {
+        console.log(`O'tish: Sahifa - ${pageNumber}, URL - ${subCategoryUrl}`); // Sahifa haqida log
+        await page.goto(`${subCategoryUrl}?page=${pageNumber}`, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.waitForSelector('.documents-list');
+
+        const docLinks = await page.$$eval('.documents-list .document-item', items => items.map(item => item.getAttribute('data-key')));
+
+        // Agar documents-list ichida 1 ta yoki undan ko'p element bo'lsa
+        if (docLinks.length < 1) {
+            console.log('Documents-list ichida fayl mavjud emas, fayllarni yuklab olish to\'xtatilmoqda.');
+            return false; // Fayllar mavjud emas
+        }
+
+        for (const docKey of docLinks) {
+            const docLink = `https://yurxizmat.uz/oz/document/${docKey}`;
+            console.log(`Hujjatga o'tish: ${docLink}`); // Hujjat haqida log
+            
+            // URL'ni tekshirish
+            try {
+                const response = await page.goto(docLink, { waitUntil: 'networkidle2' });
+                if (response.status() !== 200) {
+                    console.log(`Fayl mavjud emas: ${docLink}`); // Fayl mavjud emasligi haqida log
+                    await page.goBack(); // Orqaga qaytish
+                    continue; // Keyingi faylga o'tish
+                }
+            } catch (error) {
+                console.error(`Hujjatga o'tishda xato: ${error.message}`);
+                await page.goBack(); // Orqaga qaytish
+                continue; // Keyingi faylga o'tish
+            }
+
+            const documentViewWrapper = await page.$('.document-view-wrapper');
+            if (documentViewWrapper) {
+                const htmlContent = await documentViewWrapper.evaluate(el => el.innerHTML);
+                const titleElement = await page.$('.document-title h3');
+                const documentTitle = await titleElement.evaluate(el => el.innerText.trim().replace(/[^a-zA-Z0-9]/g, '_'));
+
+                const newPage = await browser.newPage();
+                await newPage.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+
+                const pdfPath = path.join(subCategoryFolder, `${documentTitle}.pdf`);
+                await newPage.pdf({
+                    path: pdfPath,
+                    format: 'A4',
+                    printBackground: true,
+                });
+
+                await newPage.close();
+            } else {
+                console.log('document-view-wrapper topilmadi.');
+            }
+
+            await page.goBack();
+        }
+
+        // Paginationni tekshirish
+        const nextPageDisabled = await page.$eval('.pagination .next', el => el.classList.contains('disabled'));
+        return !nextPageDisabled; // Keyingi sahifa mavjudligini qaytarish
+    } catch (error) {
+        console.error(`Sahifada xato ${pageNumber}:`, error);
+        return false; // Xato yuz berganda jarayonni to'xtatish
+    }
+};

@@ -117,4 +117,5 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+./yurxizmat-docs/
 # @end expo-cli
