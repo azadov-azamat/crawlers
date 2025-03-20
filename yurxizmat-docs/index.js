@@ -3,9 +3,9 @@ const fs = require('fs'); // Fayl tizimini import qilish
 const path = require('path'); // Yo'lni boshqarish uchun
 
 (async () => {
-    const startIndex = 5; // Bu yerda boshlash indeksini o'zgartiring
+    const startIndex = 1; // Bu yerda boshlash indeksini o'zgartiring
     const browser = await puppeteer.launch({
-        headless: 'new',
+        headless: false,
         args: [
             '--disable-setuid-sandbox',
            '--no-sandbox',
