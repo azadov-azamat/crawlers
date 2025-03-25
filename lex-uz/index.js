@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs'); // Fayl tizimini import qilish
 const path = require('path'); // Yo'lni boshqarish uchun
+const { log } = require('console');
 
 (async () => {
     const browser = await puppeteer.launch({
@@ -99,8 +100,74 @@ const path = require('path'); // Yo'lni boshqarish uchun
         return sections;
     });
 
+        // Function to set descriptions
+    const setDescriptions = async () => {
+        const descriptions = await page.evaluate(() => {
+            const elements = document.querySelectorAll('.CLAUSE_DEFAULT.lx_elem, .ACT_TEXT.lx_elem');
+            const result = {};
+          
+            let currentModdaId = null;
+            let currentModdaTitle = null;
+elements.forEach(el => {
+    if (el.classList.contains('CLAUSE_DEFAULT')) {
+        // Modda ID'sini olish
+        const idElement = el.querySelector('a[id]');
+        if (idElement) {
+            currentModdaId = idElement.getAttribute('id').replace('-', '').trim();
+            
+            // Modda sarlavhasini olish
+            currentModdaTitle = el.innerText.trim();
 
+            // Modda uchun bo'sh obyekt yaratish
+            result[currentModdaId] = {
+                title: currentModdaTitle,
+                description: []
+            };
+        }
+    } else if (el.classList.contains('ACT_TEXT') && currentModdaId) {
+        // ACT_TEXT ichidagi ID'ni olish
+        const mousemoveAttr = el.getAttribute('onmousemove');
+        const idMatch = mousemoveAttr.match(/,\s*-?(\d+)\)/);
+        const textId = idMatch ? idMatch[1] : null;
+
+        if (textId) {
+            // Matnni olish
+            const text = el.innerText.trim();
+
+            // Har bir ACT_TEXT matnini moddaning "description" massiviga qo'shish
+            result[currentModdaId].description.push({
+                id: textId,
+                text: text
+            });
+        }
+    } else if (el.classList.contains('COMMENT') && currentModdaId) {
+        const linkElement = el.getAttribute('href');
+        
+        console.log("linkElement", linkElement);
+        result[currentModdaId].comment = linkElement;
+    }
+});
+            console.log(result);
+         return result;
+        });
+        // console.log("descriptions", descriptions);
+        return descriptions;
+    };
+
+    // console.log("jsonData", jsonData);
+    const data = await setDescriptions();
+    jsonData.map(item => {
+        item.chapters.forEach(chapter => {
+            chapter.articles.forEach(article => {
+                if (data[article.id]) {
+                    article.description = data[article.id].description;
+                }
+            });
+        });
+    });
+    // Save the JSON data to a file
     fs.writeFileSync(path.join(__dirname, 'kodeks.json'), JSON.stringify(jsonData, null, 2));
+    // fs.writeFileSync(path.join(__dirname, 'result.json'), JSON.stringify(data, null, 2));
 
     await browser.close();
 })();
